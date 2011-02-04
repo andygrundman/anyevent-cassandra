@@ -1,5 +1,5 @@
-new() connects and transparently manages reconnecting if needed, etc
 Class mapping for nested object arguments
 Tests
+Docs
 describe_splits?
 Improve performance of binary protocol/memory buffer/autogen code?

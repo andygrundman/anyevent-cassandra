@@ -9,12 +9,10 @@ use AnyEvent::Cassandra::Thrift::MemoryBuffer;
 use AnyEvent::Cassandra::Thrift::BinaryProtocol;
 
 use Scalar::Util qw(blessed);
+use Time::HiRes;
 
 sub new {
     my ( $class, %opts ) = @_;
-    
-    $opts{timeout}     ||= 30;
-    $opts{buffer_size} ||= 8192;
     
     die 'host is required' unless $opts{host};
     
@@ -28,7 +26,16 @@ sub new {
         push @{ $opts{hosts} }, [ split /:/ ];
     }
     
-    my $self = bless \%opts, $class;
+    my $self = bless {
+        hosts          => $opts{hosts},
+        keyspace       => $opts{keyspace} || '',
+        connected      => 0,
+        auto_reconnect => exists $opts{auto_reconnect} ? $opts{auto_reconnect} : 1,
+        max_retries    => $opts{max_retries} || 1,
+        buffer_size    => $opts{buffer_size} || 8192,
+        timeout        => $opts{timeout}     || 30,
+        debug          => $opts{debug}       || 0,
+    }, $class;
     
     $self->{transport} = AnyEvent::Cassandra::Thrift::MemoryBuffer->new( $self->{buffer_size} );
     $self->{protocol}  = AnyEvent::Cassandra::Thrift::BinaryProtocol->new( $self->{transport} );
@@ -43,15 +50,44 @@ sub connect {
     $cb ||= AnyEvent->condvar;
     
     my $t = AnyEvent->timer( after => $self->{timeout}, cb => sub {
+        $self->{debug} && warn "<< connect [TIMEOUT]\n";
         $cb->(0, 'Connect timed out');
+        $self->{handle} && $self->{handle}->destroy;
     } );
+    
+    my $ts;
+    $self->{debug} && ($ts = Time::HiRes::time()) && warn ">> connect\n";
     
     $self->{handle} = AnyEvent::Handle->new(
         connect    => @{ $self->{hosts} }[rand $#{$self->{hosts}} ],
-        on_connect => sub { undef $t; $cb->(1) },
-        on_error   => sub { undef $t; $cb->(0, $_[2]); },
+        keepalive  => 1,
+        no_delay   => 1,
+        on_connect => sub {
+            $self->{debug} && warn "<< connected (" . sprintf("%.1f", (Time::HiRes::time() - $ts) * 1000) . " ms)\n";
+            
+            undef $t;
+            $self->{connected} = 1;
+            
+            if ( $self->{keyspace} ) {
+                $self->set_keyspace( [ $self->{keyspace} ], sub {
+                    $cb->(shift); # return set_keyspace ok/fail to caller
+                } );
+                return;
+            }
+            
+            $cb->(1);
+        },
+        on_error   => sub {
+            $self->{debug} && warn "<< connect [ERROR] $_[2]\n";
+            
+            undef $t;
+            $self->{connected} = 0;
+            
+            $cb->(0, $_[2]);
+            $_[0]->destroy;
+            delete $self->{handle};
+        },
         on_read    => sub { },
-        no_delay   => 1, # XXX needed?
     );
     
     return $cb;
@@ -61,12 +97,48 @@ sub close {
     my $self = shift;
     
     if ( defined $self->{handle} ) {
+        $self->{debug} && warn ">> close\n";
         $self->{handle}->push_shutdown;
+        $self->{connected} = 0;
     }
 }
 
 sub _call {
-    my ( $self, $method, $args, $cb ) = @_;
+    my ( $self, $method, $args, $cb, $retry ) = @_;
+    
+    if ( !$self->{connected} ) {
+        if ( $self->{auto_reconnect} ) {
+            $retry ||= 0;
+            
+            if ( $retry > $self->{max_retries} ) {
+                $self->{debug} && warn "<< max_retries reached, unable to auto-reconnect\n";
+                $cb->(0, "max_retries reached, unable to auto-reconnect");
+            }
+            
+            $self->{debug} && warn ">> $method [NOT CONNECTED] will auto-reconnect\n";
+            $self->connect( sub {
+                my ($ok, $error) = @_;
+                if ( !$ok ) {
+                    $self->{debug} && warn "<< auto-reconnect [ERROR] $error\n";
+                    $cb->(0, "auto-reconnect failed ($error)");
+                }
+                else {
+                    # Retry the call
+                    ++$retry;
+                    $self->_call( $method, $args, $cb, $retry );
+                }
+            } );
+        }
+        else {
+            $self->{debug} && warn ">> $method [ERROR] not connected\n";
+            $cb->(0, "not connected, you may want to enable auto_reconnect => 1");
+        }
+        
+        return;
+    }
+    
+    my $ts;
+    $self->{debug} && ($ts = Time::HiRes::time()) && warn ">> $method " . ($retry ? "[RETRY $retry]" : "") . "\n";
     
     my $handle = $self->{handle};
     my $membuf = $self->{transport};
@@ -79,7 +151,8 @@ sub _call {
     $cb   ||= AnyEvent->condvar;
     
     my $t = AnyEvent->timer( after => $self->{timeout}, cb => sub {
-        $cb->(0, "Request $send timed out");
+        $self->{debug} && warn "<< $method [TIMEOUT]\n";
+        $cb->(0, "Request $method timed out");
     } );
     
     $self->{api}->$send( @{$args} );
@@ -101,9 +174,11 @@ sub _call {
             my $result = eval { $self->{api}->$recv() };
 
             if ( $@ ) {
+                $self->{debug} && warn "<< $method [ERROR] $@\n";
                 $cb->(0, $@);
             }
             else {
+                $self->{debug} && warn "<< $method OK (" . sprintf("%.1f", (Time::HiRes::time() - $ts) * 1000) . " ms)\n";
                 $cb->(1, $result);
             }
         } );

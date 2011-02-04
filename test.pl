@@ -16,6 +16,7 @@ my $client = AnyEvent::Cassandra->new(
 	host       => '192.168.100.10:9160',
 	keyspace   => 'MyKeyspace',
 	timeout    => 2,
+	debug      => 1,
 );
 
 if ($async) {
@@ -24,7 +25,7 @@ if ($async) {
     
     $client->connect( sub {
         my ($status, $error) = @_;
-        warn "Connected async: $status ($error)\n";
+        #warn "Connected async: $status ($error)\n";
         if (!$status) {
             warn "Lost connection\n";
             exit;
@@ -37,7 +38,7 @@ if ($async) {
 else {
     # Sync
     my ($status, $error) = $client->connect->recv;
-    warn "Connected sync: $status ($error)\n";
+    #warn "Connected sync: $status ($error)\n";
 }
 
 my $ts = time();
@@ -55,13 +56,12 @@ tie my %methods, 'Tie::IxHash', (
     describe_partitioner => [],
     describe_snitch => [],
     describe_keyspace => [ 'MyKeyspace' ],
-    #describe_splits => [ $cf, "1", "1000", 100 ],
     
     login => [ { credentials => { 'foo', 'bar' } } ],
     set_keyspace => [ 'MyKeyspace' ],
     
     system_add_column_family => [ { keyspace => 'MyKeyspace', name => $cf } ],
-    
+    describe_splits => [ $cf, "1", "1000", 100 ],    
     insert => [ 'key', { column_family => $cf }, { name => 'colname', value => 'colvalue', timestamp => $ts } ],
     get => [ 'key', { column_family => $cf, column => 'colname' } ],
     get_slice => [ 'key', { column_family => $cf }, { column_names => [ 'colname' ] } ],
@@ -76,24 +76,25 @@ tie my %methods, 'Tie::IxHash', (
 );
 
 while ( my ($method, $args) = each %methods ) {
+    last if $method eq 'stop';
+    
     if ($async) {
         my $cv = AnyEvent->condvar;
     
-        warn "Async method call: $method ( " . dump($args) . " )\n";
+        #warn "Async method call: $method ( " . dump($args) . " )\n";
         $client->$method( $args, sub {
             my ($status, $res) = @_;
-            warn "Async $method result: " . dump($res) . "\n";
+            #warn "Async $method result: " . dump($res) . "\n";
             $cv->send;
         } );
     
         $cv->recv;
     }
     else {
-        warn "Sync method call: $method ( " . dump($args) . " )\n";
+        #warn "Sync method call: $method ( " . dump($args) . " )\n";
         my ($status, $res) = $client->$method($args)->recv;
-        warn "Sync $method result: " . dump($res) . "\n";
+        #warn "Sync $method result: " . dump($res) . "\n";
     }
 }
 
-warn "Closing\n";
 $client->close;
