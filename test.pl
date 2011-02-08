@@ -39,6 +39,10 @@ else {
     # Sync
     my ($status, $error) = $client->connect->recv;
     #warn "Connected sync: $status ($error)\n";
+    if (!$status) {
+        warn "Lost connection\n";
+        exit;
+    }
 }
 
 my $ts = time();
@@ -60,7 +64,9 @@ tie my %methods, 'Tie::IxHash', (
     login => [ { credentials => { 'foo', 'bar' } } ],
     set_keyspace => [ 'MyKeyspace' ],
     
+    system_add_keyspace => [ { name => 'MyKeyspace', strategy_class => 'org.apache.cassandra.locator.SimpleStrategy', strategy_options => {}, replication_factor => 1, cf_defs => [] } ],
     system_add_column_family => [ { keyspace => 'MyKeyspace', name => $cf } ],
+
     describe_splits => [ $cf, "1", "1000", 100 ],    
     insert => [ 'key', { column_family => $cf }, { name => 'colname', value => 'colvalue', timestamp => $ts } ],
     get => [ 'key', { column_family => $cf, column => 'colname' } ],
@@ -75,26 +81,33 @@ tie my %methods, 'Tie::IxHash', (
     truncate => [ $cf ],
 );
 
+my $cv;
+if ($async) {
+    $cv = AnyEvent->condvar;
+}
+
 while ( my ($method, $args) = each %methods ) {
     last if $method eq 'stop';
     
     if ($async) {
-        my $cv = AnyEvent->condvar;
-    
+        $cv->begin;
+        
         #warn "Async method call: $method ( " . dump($args) . " )\n";
         $client->$method( $args, sub {
             my ($status, $res) = @_;
             #warn "Async $method result: " . dump($res) . "\n";
-            $cv->send;
+            $cv->end;
         } );
-    
-        $cv->recv;
     }
     else {
         #warn "Sync method call: $method ( " . dump($args) . " )\n";
         my ($status, $res) = $client->$method($args)->recv;
         #warn "Sync $method result: " . dump($res) . "\n";
     }
+}
+
+if ($async) {
+    $cv->recv;
 }
 
 $client->close;

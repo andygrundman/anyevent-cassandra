@@ -29,6 +29,7 @@ sub new {
     my $self = bless {
         hosts          => $opts{hosts},
         keyspace       => $opts{keyspace} || '',
+        ts_func        => $opts{timestamp_func} || \&_ts_func,
         connected      => 0,
         auto_reconnect => exists $opts{auto_reconnect} ? $opts{auto_reconnect} : 1,
         max_retries    => $opts{max_retries} || 1,
@@ -59,7 +60,7 @@ sub connect {
     $self->{debug} && ($ts = Time::HiRes::time()) && warn ">> connect\n";
     
     $self->{handle} = AnyEvent::Handle->new(
-        connect    => @{ $self->{hosts} }[rand $#{$self->{hosts}} ],
+        connect    => @{ $self->{hosts} }[ rand $#{$self->{hosts}} ],
         keepalive  => 1,
         no_delay   => 1,
         on_connect => sub {
@@ -174,7 +175,10 @@ sub _call {
             my $result = eval { $self->{api}->$recv() };
 
             if ( $@ ) {
-                $self->{debug} && warn "<< $method [ERROR] $@\n";
+                $self->{debug} && do {
+                    require Data::Dump;
+                    warn "<< $method [ERROR] " . Data::Dump::dump($@) . "\n";
+                };
                 $cb->(0, $@);
             }
             else {
@@ -185,9 +189,44 @@ sub _call {
     } );
     
     return $cb;
-}        
+}
 
-### API methods
+### API methods (simpler format)
+
+=head2 insert_simple( $column_family => $key => \%data, [ $callback ] );
+
+This is a simpler way of using L<batch_mutate> to insert many columns at once.
+
+=cut
+
+sub insert_simple {
+    my ( $self, $cf, $key, $data, $cb ) = @_;
+    
+    my $ts = $self->{ts_func}->();
+    
+    my $mutation_list = [];
+    while ( my ($k, $v) = each %{$data} ) {
+        push @{$mutation_list}, bless {
+            column_or_supercolumn => bless {
+                column => bless {
+                    name      => $k,
+                    value     => $v,
+                    timestamp => $ts,
+                }, 'AnyEvent::Cassandra::API::Column',
+            }, 'AnyEvent::Cassandra::API::ColumnOrSuperColumn',
+        }, 'AnyEvent::Cassandra::API::Mutation';
+    }
+    
+    my $mutation_map = {
+        $key => {
+            $cf => $mutation_list,
+        },
+    };
+    
+    return $self->batch_mutate( [ $mutation_map ], $cb );
+}
+
+### API methods (native format)
 
 my @methods = qw(
     login
@@ -235,12 +274,21 @@ my %arg_class_map = (
     get_indexed_slices => [ 'ColumnParent', 'IndexClause', 'SlicePredicate', 'ConsistencyLevel' ], # XXX '', IndexClause has nested IndexExpression which has nested IndexOperator
     insert             => [ undef, 'ColumnParent', 'Column', 'ConsistencyLevel' ],
     remove             => [ undef, 'ColumnPath', undef, 'ConsistencyLevel' ],
-    batch_mutate       => [], # XXX map<binary, map<string, list<Mutation>>>
+    batch_mutate       => [ undef, 'ConsistencyLevel' ],
     
     system_add_column_family    => [ 'CfDef' ],
     system_add_keyspace         => [ 'KsDef' ],
     system_update_column_family => [ 'CfDef' ],
     system_update_keyspace      => [ 'KsDef' ],
+);
+
+my %nested_class_map = (
+    KsDef => {
+        cf_defs => 'CfDef',
+    },
+    CfDef => {
+        column_metadata => 'ColumnDef',
+    },
 );
 
 {
@@ -249,23 +297,55 @@ my %arg_class_map = (
         # More complex wrapper for methods with object args
         if ( my $map = $arg_class_map{$method} ) {
             *{$method} = sub {
-                my $args = [];
+                my $args = ref $_[1] eq 'ARRAY' ? $_[1] : [ $_[1] ];
                 my $i = 0;
-                for my $arg ( @{ $_[1] } ) {
-                    if ( defined $map->[$i] && !blessed($arg) ) {
-                        $arg = bless $arg, 'AnyEvent::Cassandra::API::' . $map->[$i];
+                for my $arg ( @{$args} ) {
+                    if ( defined $map->[$i] ) {
+                        if ( ref $arg eq 'HASH' ) {
+                            # Map any nested classes within this one
+                            if ( my $smap = $nested_class_map{ $map->[$i] } ) {
+                                while ( my ($k, $v) = each %{$smap} ) {                          
+                                    if ( my $item  = $arg->{$k} ) {
+                                        my $class = 'AnyEvent::Cassandra::API::' . $v;
+                                        
+                                        if ( ref $item eq 'ARRAY' ) {
+                                            # Map an array of hashrefs to an array of objects
+                                            foreach ( @{$item} ) {
+                                                $_ = bless $_, $class;
+                                            }
+                                        }
+                                        else {
+                                            # Map just the single object 
+                                            $item = bless $item, $class;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if ( !blessed($arg) ) {
+                            $arg = bless $arg, 'AnyEvent::Cassandra::API::' . $map->[$i];
+                        }
                     }
                     $i++;
                 }
                 
-                $_[0]->_call( $method, $_[1], $_[2] );
+                $_[0]->_call( $method, $args, $_[2] );
             };
         }
         else {
             # Simple wrapper for methods without object args
-            *{$method} = sub { $_[0]->_call( $method, $_[1], $_[2] ); };
+            *{$method} = sub { $_[0]->_call( $method, ref $_[1] eq 'ARRAY' ? $_[1] : [ $_[1] ], $_[2] ); };
         }
     }
+}
+
+# Default timestamp function, creates a 64-bit int from HiRes time by simply removing the decimal point
+sub _ts_func {
+    my $ts = sprintf "%.06f", Time::HiRes::time();
+    $ts =~ s/\.//;
+    
+    return $ts;
 }
 
 1;
