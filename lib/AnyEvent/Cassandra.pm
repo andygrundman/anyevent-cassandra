@@ -8,6 +8,7 @@ use AnyEvent::Cassandra::API::Cassandra;
 use AnyEvent::Cassandra::Thrift::MemoryBuffer;
 use AnyEvent::Cassandra::Thrift::BinaryProtocol;
 
+use Bit::Vector;
 use Scalar::Util qw(blessed);
 use Time::HiRes;
 
@@ -31,6 +32,7 @@ sub new {
         keyspace       => $opts{keyspace} || '',
         ts_func        => $opts{timestamp_func} || \&_ts_func,
         connected      => 0,
+        cf_metadata    => {},
         auto_reconnect => exists $opts{auto_reconnect} ? $opts{auto_reconnect} : 1,
         max_retries    => $opts{max_retries} || 1,
         buffer_size    => $opts{buffer_size} || 8192,
@@ -70,9 +72,7 @@ sub connect {
             $self->{connected} = 1;
             
             if ( $self->{keyspace} ) {
-                $self->set_keyspace( [ $self->{keyspace} ], sub {
-                    $cb->(shift); # return set_keyspace ok/fail to caller
-                } );
+                $self->set_keyspace( [ $self->{keyspace} ], $cb );
                 return;
             }
             
@@ -106,6 +106,9 @@ sub close {
 
 sub _call {
     my ( $self, $method, $args, $cb, $retry ) = @_;
+    
+    # Strip leading underscore needed for some methods
+    $method =~ s/^_//;
     
     if ( !$self->{connected} ) {
         if ( $self->{auto_reconnect} ) {
@@ -144,7 +147,6 @@ sub _call {
     my $handle = $self->{handle};
     my $membuf = $self->{transport};
     
-    # Assume "send_foo" and "recv_foo" convention
     my $send = "send_${method}";
     my $recv = "recv_${method}";
     
@@ -204,18 +206,40 @@ sub insert_simple {
     
     my $ts = $self->{ts_func}->();
     
+    my $metadata  = $self->{cf_metadata}->{$cf} || {};
+    my $col_types = $metadata->{column_types} || {};
+    
     my $mutation_list = [];
-    while ( my ($k, $v) = each %{$data} ) {
-        push @{$mutation_list}, bless {
-            column_or_supercolumn => bless {
-                column => bless {
-                    name      => $k,
-                    value     => $v,
-                    timestamp => $ts,
-                }, 'AnyEvent::Cassandra::API::Column',
-            }, 'AnyEvent::Cassandra::API::ColumnOrSuperColumn',
-        }, 'AnyEvent::Cassandra::API::Mutation';
+    if ( ref $data eq 'HASH' ) {
+        while ( my ($k, $v) = each %{$data} ) {        
+            push @{$mutation_list}, bless {
+                column_or_supercolumn => bless {
+                    column => bless {
+                        name      => $k,
+                        value     => $v,
+                        timestamp => $ts,
+                        _type     => $col_types->{$k}, # used for conversion
+                    }, 'AnyEvent::Cassandra::API::Column',
+                }, 'AnyEvent::Cassandra::API::ColumnOrSuperColumn',
+            }, 'AnyEvent::Cassandra::API::Mutation';
+        }
     }
+    elsif ( ref $data eq 'ARRAY' ) {
+        # Valueless key
+        for my $k ( @{$data} ) {
+            push @{$mutation_list}, bless {
+                column_or_supercolumn => bless {
+                    column => bless {
+                        name      => $k,
+                        value     => '',
+                        timestamp => $ts,
+                    }, 'AnyEvent::Cassandra::API::Column',
+                }, 'AnyEvent::Cassandra::API::ColumnOrSuperColumn',
+            }, 'AnyEvent::Cassandra::API::Mutation';
+        }
+    }
+    
+    # XXX convert $key type?
     
     my $mutation_map = {
         $key => {
@@ -226,18 +250,56 @@ sub insert_simple {
     return $self->batch_mutate( [ $mutation_map ], $cb );
 }
 
+# Hack the API::Column auto-generated write method to handle data type conversion
+# Unfortunately we can't also do this for read() because it doesn't have the type
+# or even column family information.
+*AnyEvent::Cassandra::API::Column::write = sub {
+    my ( $self, $output ) = @_;
+    my $xfer = 0;
+    $xfer += $output->writeStructBegin('Column');
+    if ( defined $self->{name} ) {
+        $xfer += $output->writeFieldBegin( 'name', TType::STRING, 1 );
+        $xfer += $output->writeString( $self->{name} );
+        $xfer += $output->writeFieldEnd();
+    }
+    if ( defined $self->{value} ) {
+        $xfer += $output->writeFieldBegin( 'value', TType::STRING, 2 );
+        if ( my $type = $self->{_type} ) {
+            $xfer += $output->writeString( _convert_to( $type, $self->{value} ) );
+        }
+        else {
+            $xfer += $output->writeString( $self->{value} );
+        }
+
+        $xfer += $output->writeFieldEnd();
+    }
+    if ( defined $self->{timestamp} ) {
+        $xfer += $output->writeFieldBegin( 'timestamp', TType::I64, 3 );
+        $xfer += $output->writeI64( $self->{timestamp} );
+        $xfer += $output->writeFieldEnd();
+    }
+    if ( defined $self->{ttl} ) {
+        $xfer += $output->writeFieldBegin( 'ttl', TType::I32, 4 );
+        $xfer += $output->writeI32( $self->{ttl} );
+        $xfer += $output->writeFieldEnd();
+    }
+    $xfer += $output->writeFieldStop();
+    $xfer += $output->writeStructEnd();
+    return $xfer;
+};
+
 ### API methods (native format)
+# Methods with underscores are called by wrappers that handle datatype conversion
 
 my @methods = qw(
     login
-    set_keyspace
-    get
-    get_slice
+    _get
+    _get_slice
     get_count
-    multiget_slice
+    _multiget_slice
     multiget_count
-    get_range_slices
-    get_indexed_slices
+    _get_range_slices
+    _get_indexed_slices
     insert
     remove
     batch_mutate
@@ -264,17 +326,17 @@ my @methods = qw(
 # Mapping from API method to arg class names, needed so callers don't have
 # to bother creating lots of objects
 my %arg_class_map = (
-    login              => [ 'AuthenticationRequest' ],
-    get                => [ undef, 'ColumnPath', 'ConsistencyLevel' ],
-    get_slice          => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ], # XXX SlicePredicate has nested SliceRange
-    get_count          => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ], # XXX ''
-    multiget_slice     => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ], # XXX ''
-    multiget_count     => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ], # XXX ''
-    get_range_slices   => [ 'ColumnParent', 'SlicePredicate', 'KeyRange', 'ConsistencyLevel' ], # XXX ''
-    get_indexed_slices => [ 'ColumnParent', 'IndexClause', 'SlicePredicate', 'ConsistencyLevel' ], # XXX '', IndexClause has nested IndexExpression which has nested IndexOperator
-    insert             => [ undef, 'ColumnParent', 'Column', 'ConsistencyLevel' ],
-    remove             => [ undef, 'ColumnPath', undef, 'ConsistencyLevel' ],
-    batch_mutate       => [ undef, 'ConsistencyLevel' ],
+    login               => [ 'AuthenticationRequest' ],
+    _get                => [ undef, 'ColumnPath', 'ConsistencyLevel' ],
+    _get_slice          => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ],
+    get_count           => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ],
+    _multiget_slice     => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ],
+    multiget_count      => [ undef, 'ColumnParent', 'SlicePredicate', 'ConsistencyLevel' ],
+    _get_range_slices   => [ 'ColumnParent', 'SlicePredicate', 'KeyRange', 'ConsistencyLevel' ],
+    _get_indexed_slices => [ 'ColumnParent', 'IndexClause', 'SlicePredicate', 'ConsistencyLevel' ],
+    insert              => [ undef, 'ColumnParent', 'Column', 'ConsistencyLevel' ],
+    remove              => [ undef, 'ColumnPath', undef, 'ConsistencyLevel' ],
+    batch_mutate        => [ undef, 'ConsistencyLevel' ],
     
     system_add_column_family    => [ 'CfDef' ],
     system_add_keyspace         => [ 'KsDef' ],
@@ -288,6 +350,12 @@ my %nested_class_map = (
     },
     CfDef => {
         column_metadata => 'ColumnDef',
+    },
+    SlicePredicate => {
+        slice_range => 'SliceRange',
+    },
+    IndexClause => {
+        expressions => 'IndexExpression',
     },
 );
 
@@ -340,12 +408,251 @@ my %nested_class_map = (
     }
 }
 
+# get method wrapper to handle datatype conversion
+sub get {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    $self->_get( $args, sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        if ( my $col = $res->{column} ) {
+            my $metadata  = $self->{cf_metadata}->{ $args->[1]->{column_family} } || {};
+            my $col_types = $metadata->{column_types} || {};
+            
+            if ( my $type = $col_types->{ $col->{name} } ) {
+                $col->{value} = _convert_from( $type, $col->{value} );
+            }
+        }
+        
+        $cb->(@_);
+    } );
+    
+    return $cb;
+}
+
+sub get_slice {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    $self->_get_slice( $args, sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        my $metadata  = $self->{cf_metadata}->{ $args->[1]->{column_family} } || {};
+        my $col_types = $metadata->{column_types} || {};
+        
+        for my $cosc ( @{$res} ) {
+            if ( my $col = $cosc->{column} ) {
+                if ( my $type = $col_types->{ $col->{name} } ) {
+                    $col->{value} = _convert_from( $type, $col->{value} );
+                }
+            }
+        }
+        
+        $cb->(@_);
+    } );
+    
+    return $cb;
+}
+
+sub multiget_slice {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    $self->_multiget_slice( $args, sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        my $metadata  = $self->{cf_metadata}->{ $args->[1]->{column_family} } || {};
+        my $col_types = $metadata->{column_types} || {};
+        
+        while ( my ($key, $list) = each %{$res} ) {
+            for my $cosc ( @{$list} ) {
+                if ( my $col = $cosc->{column} ) {
+                    if ( my $type = $col_types->{ $col->{name} } ) {
+                        $col->{value} = _convert_from( $type, $col->{value} );
+                    }
+                }
+            }
+        }
+        
+        $cb->(@_);
+    } );
+    
+    return $cb;
+}
+
+sub get_range_slices {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    $self->_get_range_slices( $args, sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        my $metadata  = $self->{cf_metadata}->{ $args->[0]->{column_family} } || {};
+        my $col_types = $metadata->{column_types} || {};
+        
+        for my $slice ( @{$res} ) {
+            for my $cosc ( @{ $slice->{columns} } ) {
+                if ( my $col = $cosc->{column} ) {
+                    if ( my $type = $col_types->{ $col->{name} } ) {
+                        $col->{value} = _convert_from( $type, $col->{value} );
+                    }
+                }
+            }
+        }
+        
+        $cb->(@_);
+    } );
+    
+    return $cb;
+}
+
+sub get_indexed_slices {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    $self->_get_indexed_slices( $args, sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        my $metadata  = $self->{cf_metadata}->{ $args->[0]->{column_family} } || {};
+        my $col_types = $metadata->{column_types} || {};
+        
+        for my $slice ( @{$res} ) {
+            for my $cosc ( @{ $slice->{columns} } ) {
+                if ( my $col = $cosc->{column} ) {
+                    if ( my $type = $col_types->{ $col->{name} } ) {
+                        $col->{value} = _convert_from( $type, $col->{value} );
+                    }
+                }
+            }
+        }
+        
+        $cb->(@_);
+    } );
+    
+    return $cb;
+}
+
+# set_keyspace needs to run describe_keyspace to get metadata about the keyspace
+sub set_keyspace {
+    my ( $self, $args, $cb ) = @_;
+    
+    $cb ||= AnyEvent->condvar;
+    
+    my $keyspace = ref $args eq 'ARRAY' ? $args->[0] : $args;
+    
+    $self->{keyspace} = $keyspace;
+    
+    $self->_call( 'set_keyspace', [ $keyspace ], sub {
+        my ($ok, $res) = @_;
+        return $cb->(@_) if !$ok;
+        
+        $self->describe_keyspace( [ $keyspace ], sub {
+            my ($ok, $res) = @_;
+            return $cb->(@_) if !$ok;
+            
+            # Store info about all columns marked with a validation_class
+            # so that we can properly convert data for those columns
+            my $cf_metadata = {};
+            for my $cf ( @{ $res->{cf_defs} } ) {
+                my $columns = {};
+                
+                for my $col ( @{ $cf->{column_metadata} || [] } ) {
+                    if ( my ($vc) = $col->{validation_class} =~ /org.apache.cassandra.db.marshal.(\w+)/ ) {
+                        # Ignore types we don't have to convert
+                        next if $vc =~ /^(?:Ascii|Bytes|UTF8)/;
+                        
+                        $columns->{ $col->{name} } = $vc;
+                    }
+                }
+                
+                # comparator_type is the data type for all keys
+                my ($comparator_type) = $cf->{comparator_type} =~ /org.apache.cassandra.db.marshal.(\w+)/;
+                
+                # Ignore types we don't have to convert
+                if ( !$comparator_type || $comparator_type =~ /^(?:Ascii|Bytes|UTF8)/ ) {
+                    $comparator_type = 0;
+                }
+                
+                $cf_metadata->{ $cf->{name} } = {
+                    key_type     => $comparator_type,
+                    column_types => $columns,
+                };
+            }
+            
+            $self->{cf_metadata} = $cf_metadata;
+            
+            $cb->(@_);
+        } );
+    } );
+    
+    return $cb;
+}
+
 # Default timestamp function, creates a 64-bit int from HiRes time by simply removing the decimal point
 sub _ts_func {
     my $ts = sprintf "%.06f", Time::HiRes::time();
     $ts =~ s/\.//;
     
     return $ts;
+}
+
+# Convert to a given Cassandra type
+sub _convert_to {
+    my ( $type, $value ) = @_;
+    
+    if ( $type eq 'IntegerType' ) {
+        if ( abs($value) < 1 << 31 ) { # number fits into signed 32-bit
+            $value = pack 'N!', $value;
+        }
+        else {
+            my $vec = Bit::Vector->new_Dec(64, $value);
+            $value = pack 'NN', $vec->Chunk_Read(32, 32), $vec->Chunk_Read(32, 0);
+        }
+    }
+    elsif ( $type eq 'LongType' ) {
+        my $vec = Bit::Vector->new_Dec(64, $value);
+        $value = pack 'NN', $vec->Chunk_Read(32, 32), $vec->Chunk_Read(32, 0);
+    }
+    elsif ( $type eq 'LexicalUUIDType' || $type eq 'TimeUUIDType' ) {
+        $value = pack 'H*', $value;
+    }
+    
+    return $value;
+}
+
+# Convert from a given Cassandra type
+sub _convert_from {
+    my ( $type, $value ) = @_;
+    
+    if ( $type eq 'IntegerType' ) {
+        if ( length($value) == 4 ) {
+            $value = unpack 'N!', $value;
+        }
+        elsif ( length($value) == 8 ) {
+            my $vec = Bit::Vector->new_Hex(64, unpack('H*', $value));
+            $value = $vec->to_Dec();
+        }
+    }
+    elsif ( $type eq 'LongType' ) {
+        my $vec = Bit::Vector->new_Hex(64, unpack('H*', $value));
+        $value = $vec->to_Dec();
+    }
+    elsif ( $type eq 'LexicalUUIDType' || $type eq 'TimeUUIDType' ) {
+        $value = unpack 'H*', $value;
+    }
+    
+    return $value;
 }
 
 1;

@@ -1,7 +1,10 @@
-new( credentials => [ 'foo', 'bar' ] )
-Class mapping for nested object arguments
-Tests
-Docs
+* new( credentials => [ 'foo', 'bar' ] )
+* Class mapping for nested object arguments
+* Tests
+* Docs
+* Export constants to avoid having to write out AnyEvent::Cassandra::API::IndexType::KEYS, etc.
+* Convert keys to native data types?
+
 Python/Ruby/PHP have C implementations, port one of them as a standalone module, or contrib to thrift
 * PHP: C++, single file
 * Python: C, single file, no compact
