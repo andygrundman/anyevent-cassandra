@@ -30,6 +30,8 @@ sub new {
     my $self = bless {
         hosts          => $opts{hosts},
         keyspace       => $opts{keyspace} || '',
+        user           => $opts{user} || '',
+        pass           => $opts{pass} || '',
         ts_func        => $opts{timestamp_func} || \&_ts_func,
         connected      => 0,
         cf_metadata    => {},
@@ -71,12 +73,38 @@ sub connect {
             undef $t;
             $self->{connected} = 1;
             
-            if ( $self->{keyspace} ) {
-                $self->set_keyspace( [ $self->{keyspace} ], $cb );
+            if ( $self->{user} ) {
+                # Login if a user/pass was provided
+                my $auth = {
+                    credentials => {
+                        username => $self->{user},
+                        password => $self->{pass},
+                    }
+                };
+                
+                $self->login( $auth, sub {
+                    my ($ok, $res) = @_;
+                    if ( !$ok ) {
+                        $cb->(@_);
+                        $self->{handle}->destroy;
+                    }
+                    else {
+                        if ( $self->{keyspace} ) {
+                            $self->set_keyspace( [ $self->{keyspace} ], $cb );
+                        }
+                        else {
+                            $cb->(1);
+                        }
+                    }
+                } );
                 return;
             }
-            
-            $cb->(1);
+            elsif ( $self->{keyspace} ) {
+                $self->set_keyspace( [ $self->{keyspace} ], $cb );
+            }
+            else {            
+                $cb->(1);
+            }
         },
         on_error   => sub {
             $self->{debug} && warn "<< connect [ERROR] $_[2]\n";
