@@ -13,7 +13,7 @@ my $async = shift; # test async or sync operation
 if (!defined $async) { $async = 1 }
 
 my $client = AnyEvent::Cassandra->new(
-	host       => '192.168.100.10:9160',
+	host       => '127.0.0.1:9160',
 	keyspace   => 'MyKeyspace',
 	timeout    => 2,
 	debug      => 1,

@@ -5,8 +5,7 @@ use strict;
 use AnyEvent;
 use AnyEvent::Handle;
 use AnyEvent::Cassandra::API::Cassandra;
-use AnyEvent::Cassandra::Thrift::MemoryBuffer;
-use AnyEvent::Cassandra::Thrift::BinaryProtocol;
+use Thrift::XS;
 
 use Bit::Vector;
 use Scalar::Util qw(blessed);
@@ -36,14 +35,14 @@ sub new {
         connected      => 0,
         cf_metadata    => {},
         auto_reconnect => exists $opts{auto_reconnect} ? $opts{auto_reconnect} : 1,
-        max_retries    => $opts{max_retries} || 1,
+        max_retries    => exists $opts{max_retries} ? $opts{max_retries} : 1,
         buffer_size    => $opts{buffer_size} || 8192,
         timeout        => $opts{timeout}     || 30,
         debug          => $opts{debug}       || 0,
     }, $class;
     
-    $self->{transport} = AnyEvent::Cassandra::Thrift::MemoryBuffer->new( $self->{buffer_size} );
-    $self->{protocol}  = AnyEvent::Cassandra::Thrift::BinaryProtocol->new( $self->{transport} );
+    $self->{transport} = Thrift::XS::MemoryBuffer->new( $self->{buffer_size} );
+    $self->{protocol}  = Thrift::XS::BinaryProtocol->new( $self->{transport} );
     $self->{api}       = AnyEvent::Cassandra::API::CassandraClient->new( $self->{protocol} );
     
     return $self;
@@ -82,7 +81,7 @@ sub connect {
                     }
                 };
                 
-                $self->login( $auth, sub {
+                $self->login( [ $auth ], sub {
                     my ($ok, $res) = @_;
                     if ( !$ok ) {
                         $cb->(@_);

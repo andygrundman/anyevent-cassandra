@@ -1,7 +1,6 @@
-* new( credentials => [ 'foo', 'bar' ] )
 * Export constants to avoid having to write out AnyEvent::Cassandra::API::IndexType::KEYS, etc.
 * Convert keys to native data types?
-* Support CQL
+* Support CQL (latest thrift file)
 * Consistency stuff
 * Tests
 * Docs
