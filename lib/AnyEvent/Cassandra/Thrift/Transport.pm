@@ -26,7 +26,7 @@ use AnyEvent::Cassandra::Thrift;
 #
 # Transport exceptions
 #
-package TTransportException;
+package AnyEvent::Cassandra::Thrift::TTransportException;
 use base('AnyEvent::Cassandra::Thrift::TException');
 
 use constant UNKNOWN      => 0;
@@ -57,7 +57,7 @@ sub isOpen
 #
 # Open the transport for reading/writing
 #
-# @throws TTransportException if cannot open
+# @throws AnyEvent::Cassandra::Thrift::TTransportException if cannot open
 #
 sub open
 {
@@ -77,7 +77,7 @@ sub close
 #
 # @param int    $len How much to read
 # @return string The data that has been read
-# @throws TTransportException if cannot read any more data
+# @throws AnyEvent::Cassandra::Thrift::TTransportException if cannot read any more data
 #
 sub read
 {
@@ -89,7 +89,7 @@ sub read
 # Guarantees that the full amount of data is read.
 #
 # @return string The data, of exact length
-# @throws TTransportException if cannot read data
+# @throws AnyEvent::Cassandra::Thrift::TTransportException if cannot read data
 #
 sub readAll
 {
@@ -110,7 +110,7 @@ sub readAll
 # Writes the given data out.
 #
 # @param string $buf  The data to write
-# @throws TTransportException if writing fails
+# @throws AnyEvent::Cassandra::Thrift::TTransportException if writing fails
 #
 sub write
 {
@@ -121,7 +121,7 @@ sub write
 #
 # Flushes any pending data out of a buffer
 #
-# @throws TTransportException if a writing error occurs
+# @throws AnyEvent::Cassandra::Thrift::TTransportException if a writing error occurs
 #
 sub flush {}
 

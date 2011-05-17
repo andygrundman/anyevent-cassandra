@@ -116,7 +116,7 @@ sub readAll
 
     my $avail = ($self->{wPos} - $self->{rPos});
     if ($avail < $len) {
-        die new TTransportException("Attempt to readAll($len) found only $avail available");
+        die new AnyEvent::Cassandra::Thrift::TTransportException("Attempt to readAll($len) found only $avail available");
     }
 
     my $data = '';

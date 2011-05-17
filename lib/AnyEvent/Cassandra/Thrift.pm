@@ -66,7 +66,7 @@ sub new {
 }
 1;
 
-package TApplicationException;
+package AnyEvent::Cassandra::Thrift::TApplicationException;
 use base('AnyEvent::Cassandra::Thrift::TException');
 
 use constant UNKNOWN              => 0;
@@ -140,7 +140,7 @@ sub write {
 
     my $xfer   = 0;
 
-    $xfer += $output->writeStructBegin('TApplicationException');
+    $xfer += $output->writeStructBegin('AnyEvent::Cassandra::Thrift::TApplicationException');
 
     if ($self->getMessage()) {
         $xfer += $output->writeFieldBegin('message', TType::STRING, 1);
