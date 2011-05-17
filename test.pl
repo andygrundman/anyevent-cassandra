@@ -76,6 +76,12 @@ tie my %methods, 'Tie::IxHash', (
     multiget_count => [ [ 'key' ], { column_family => $cf }, { column_names => [ 'colname' ] } ],
     get_range_slices => [ { column_family => $cf }, { column_names => [ 'colname' ] }, { start_key => 'key', end_key => 'key', count => 100 } ],
     #get_indexed_slices => [ { column_family => $cf }, { expressions => [ { column_name => 'colname', op => EQ, value => 'colvalue' } ], start_key => 'key' }, { column_names => [ 'colname' ] } ],
+    
+    # XXX add()
+    # XXX remove_counter()
+    
+    execute_cql_query => [ 'SELECT * FROM AndyTest', AnyEvent::Cassandra::API::Compression::NONE ],
+    
     remove => [ 'key', { column_family => $cf }, $ts ],
     #batch_mutate
     truncate => [ $cf ],

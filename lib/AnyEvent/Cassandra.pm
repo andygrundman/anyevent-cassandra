@@ -328,9 +328,12 @@ my @methods = qw(
     _get_range_slices
     _get_indexed_slices
     insert
+    add
     remove
+    remove_counter
     batch_mutate
     truncate
+    execute_cql_query
     
     describe_schema_versions
     describe_keyspaces
@@ -362,7 +365,9 @@ my %arg_class_map = (
     _get_range_slices   => [ 'ColumnParent', 'SlicePredicate', 'KeyRange', 'ConsistencyLevel' ],
     _get_indexed_slices => [ 'ColumnParent', 'IndexClause', 'SlicePredicate', 'ConsistencyLevel' ],
     insert              => [ undef, 'ColumnParent', 'Column', 'ConsistencyLevel' ],
+    add                 => [ undef, 'ColumnParent', 'CounterColumn', 'ConsistencyLevel' ],
     remove              => [ undef, 'ColumnPath', undef, 'ConsistencyLevel' ],
+    remove_counter      => [ undef, 'ColumnPath', 'ConsistencyLevel' ],
     batch_mutate        => [ undef, 'ConsistencyLevel' ],
     
     system_add_column_family    => [ 'CfDef' ],
