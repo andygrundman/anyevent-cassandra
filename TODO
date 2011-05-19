@@ -4,44 +4,4 @@
 * Consistency stuff
 * Tests
 * Docs
-
-Python/Ruby/PHP have C implementations, port one of them as a standalone module, or contrib to thrift
-* PHP: C++, single file
-* Python: C, single file, no compact
-* Ruby: C, lots of files, compact protocol
-* Also support compact protocol
-
-Sugar for simpler method calling:
-
-$client->keyspace('other_keyspace');
-
-# default timestamp func is HiRes
-$client->timestamp_func( sub { Time::HiRes::time() } );
-
-# default is ZERO
-$client->write_consistency_level( ZERO );
-
-# default is QUORUM
-$client->read_consistency_level( QUORUM );
-
-# insert standard CF
-$client->insert_simple( $cf => $key => $col => $value, sub { … } );
-$client->insert_simple( $cf => $key => { $col => $value, ... }, sub { ... } );
-
-# get CF/SCF
-$client->get( $cf => $key, sub { } );
-$client->get( $cf => $key, $col, sub { } );
-$client->get( $cf => $key, $supercol, sub { } ); # may not be possible
-
-$client->get_slice( TODO );
-
-$client->get_indexed_slices( TODO );
-
-$client->get_range_slices( TODO );
-
-$client->multiget_slice( TODO );
-
-$client->remove( $cf => $key, sub { } );
-$client->remove( $cf => $key, $col, sub { } );
-
-$client->get_count( $cf => $key, sub { } );
+* Stringify exception objects

@@ -19,7 +19,7 @@
 
 our $VERSION = '0.1';
 
-require 5.6.0;
+#require 5.6.0;
 use strict;
 use warnings;
 

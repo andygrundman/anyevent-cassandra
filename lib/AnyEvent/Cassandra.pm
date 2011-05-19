@@ -11,6 +11,8 @@ use Bit::Vector;
 use Scalar::Util qw(blessed);
 use Time::HiRes;
 
+our $VERSION = '0.01';
+
 sub new {
     my ( $class, %opts ) = @_;
     
@@ -118,7 +120,7 @@ sub connect {
         on_read    => sub { },
     );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 sub close {
@@ -217,7 +219,7 @@ sub _call {
         } );
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 ### API methods (simpler format)
@@ -462,7 +464,7 @@ sub get {
         $cb->(@_);
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 sub get_slice {
@@ -488,7 +490,7 @@ sub get_slice {
         $cb->(@_);
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 sub multiget_slice {
@@ -516,7 +518,7 @@ sub multiget_slice {
         $cb->(@_);
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 sub get_range_slices {
@@ -544,7 +546,7 @@ sub get_range_slices {
         $cb->(@_);
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 sub get_indexed_slices {
@@ -572,7 +574,7 @@ sub get_indexed_slices {
         $cb->(@_);
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 # set_keyspace needs to run describe_keyspace to get metadata about the keyspace
@@ -628,7 +630,7 @@ sub set_keyspace {
         } );
     } );
     
-    return $cb;
+    return wantarray ? ($cb->recv) : $cb;
 }
 
 # Default timestamp function, creates a 64-bit int from HiRes time by simply removing the decimal point
