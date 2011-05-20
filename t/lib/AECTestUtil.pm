@@ -82,6 +82,13 @@ sub setup_keyspace {
         die "Unable to create test keyspace: " . $res->why . "\n";
     }
     
+    ($ok, $res) = $c->set_keyspace(TEST_KEYSPACE_NAME);
+    if ( !$ok ) {
+        die "Unable to set keyspace to " . TEST_KEYSPACE_NAME . "\n";
+    }
+    
+    # XXX create some test CFs
+    
     return 1;
 }
 

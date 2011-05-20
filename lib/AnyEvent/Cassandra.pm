@@ -282,40 +282,43 @@ sub insert_simple {
 # Hack the API::Column auto-generated write method to handle data type conversion
 # Unfortunately we can't also do this for read() because it doesn't have the type
 # or even column family information.
-*AnyEvent::Cassandra::API::Column::write = sub {
-    my ( $self, $output ) = @_;
-    my $xfer = 0;
-    $xfer += $output->writeStructBegin('Column');
-    if ( defined $self->{name} ) {
-        $xfer += $output->writeFieldBegin( 'name', TType::STRING, 1 );
-        $xfer += $output->writeString( $self->{name} );
-        $xfer += $output->writeFieldEnd();
-    }
-    if ( defined $self->{value} ) {
-        $xfer += $output->writeFieldBegin( 'value', TType::STRING, 2 );
-        if ( my $type = $self->{_type} ) {
-            $xfer += $output->writeString( _convert_to( $type, $self->{value} ) );
+{
+    no warnings 'redefine';
+    *AnyEvent::Cassandra::API::Column::write = sub {
+        my ( $self, $output ) = @_;
+        my $xfer = 0;
+        $xfer += $output->writeStructBegin('Column');
+        if ( defined $self->{name} ) {
+            $xfer += $output->writeFieldBegin( 'name', TType::STRING, 1 );
+            $xfer += $output->writeString( $self->{name} );
+            $xfer += $output->writeFieldEnd();
         }
-        else {
-            $xfer += $output->writeString( $self->{value} );
-        }
+        if ( defined $self->{value} ) {
+            $xfer += $output->writeFieldBegin( 'value', TType::STRING, 2 );
+            if ( my $type = $self->{_type} ) {
+                $xfer += $output->writeString( _convert_to( $type, $self->{value} ) );
+            }
+            else {
+                $xfer += $output->writeString( $self->{value} );
+            }
 
-        $xfer += $output->writeFieldEnd();
-    }
-    if ( defined $self->{timestamp} ) {
-        $xfer += $output->writeFieldBegin( 'timestamp', TType::I64, 3 );
-        $xfer += $output->writeI64( $self->{timestamp} );
-        $xfer += $output->writeFieldEnd();
-    }
-    if ( defined $self->{ttl} ) {
-        $xfer += $output->writeFieldBegin( 'ttl', TType::I32, 4 );
-        $xfer += $output->writeI32( $self->{ttl} );
-        $xfer += $output->writeFieldEnd();
-    }
-    $xfer += $output->writeFieldStop();
-    $xfer += $output->writeStructEnd();
-    return $xfer;
-};
+            $xfer += $output->writeFieldEnd();
+        }
+        if ( defined $self->{timestamp} ) {
+            $xfer += $output->writeFieldBegin( 'timestamp', TType::I64, 3 );
+            $xfer += $output->writeI64( $self->{timestamp} );
+            $xfer += $output->writeFieldEnd();
+        }
+        if ( defined $self->{ttl} ) {
+            $xfer += $output->writeFieldBegin( 'ttl', TType::I32, 4 );
+            $xfer += $output->writeI32( $self->{ttl} );
+            $xfer += $output->writeFieldEnd();
+        }
+        $xfer += $output->writeFieldStop();
+        $xfer += $output->writeStructEnd();
+        return $xfer;
+    };
+}
 
 ### API methods (native format)
 # Methods with underscores are called by wrappers that handle datatype conversion

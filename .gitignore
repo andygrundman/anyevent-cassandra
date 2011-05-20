@@ -1,6 +1,6 @@
 Makefile
 Makefile.old
-META.yml
+*META.yml
 blib
 pm_to_blib
 AnyEvent-Cassandra*
