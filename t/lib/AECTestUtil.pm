@@ -9,7 +9,7 @@ use IO::Socket::INET;
 
 use constant TEST_KEYSPACE_NAME => 'AECTestKeyspace';
 
-our @EXPORT = qw(check_server get_client setup_keyspace cleanup_keyspace);
+our @EXPORT = qw(check_server get_client setup_keyspace cleanup_keyspace setup_column_family cleanup_column_family);
 
 my $client;
 
@@ -87,8 +87,6 @@ sub setup_keyspace {
         die "Unable to set keyspace to " . TEST_KEYSPACE_NAME . "\n";
     }
     
-    # XXX create some test CFs
-    
     return 1;
 }
 
@@ -102,6 +100,37 @@ sub cleanup_keyspace {
     
     $client = undef;
     return 1;
+}
+
+sub setup_column_family {
+    my $cf = shift;
+    
+    my $c = get_client();
+    
+    my ($ok, $res) = $c->system_add_column_family( ref $cf eq 'HASH' ? $cf : {
+        keyspace => TEST_KEYSPACE_NAME,
+        name     => $cf,
+    } );
+    
+    if ( !$ok ) {
+        die "Unable to create test column family $cf: " . $res->why . "\n";
+    }
+    
+    return 1;
+}
+
+sub cleanup_column_family {
+    my $cf = shift;
+    
+    my $c = get_client();
+    
+    my ($ok, $res) = $c->system_drop_column_family($cf);
+    if ( !$ok ) {
+        die "Unable to drop test column family $cf: " . $res->why . "\n";
+    }
+    
+    return 1;
+    
 }
 
 1;
