@@ -179,8 +179,13 @@ sub _call {
     my $send = "send_${method}";
     my $recv = "recv_${method}";
     
-    $args ||= [];
-    $cb   ||= AnyEvent->condvar;
+    # Methods without any args may pass callback only
+    if ( ref $args->[0] eq 'CODE' ) {
+        $cb = $args->[0];
+        $args = [];
+    }
+    
+    $cb ||= AnyEvent->condvar;
     
     my $t = AnyEvent->timer( after => $self->{timeout}, cb => sub {
         $self->{debug} && warn "<< $method [TIMEOUT]\n";
